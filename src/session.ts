@@ -277,15 +277,30 @@ export class EiSession {
   #live = (slot: Slot): boolean => this.#devices.get(slot)?.emulating === true
 
   /**
-   * The device to inject pointer events through. Buttons and scroll go to the
-   * absolute device when there is one, because that is the pointer a click
-   * lands on; a relative-only session falls back to the pointer device.
+   * The device for absolute motion, buttons and scroll. The absolute device
+   * carries BUTTON and SCROLL as well, so a click lands on the very pointer a
+   * move placed; a relative-only session falls back to the pointer device.
    */
   #pointing(): Entry {
     if (this.#live("absolute")) return this.#need("NO_ABSOLUTE_POINTER")
     const relative = this.#devices.get("relative")
     if (relative?.emulating) return relative
     return this.#need("NO_ABSOLUTE_POINTER")
+  }
+
+  /**
+   * The device for relative motion. It must be the device that actually has
+   * POINTER: libei rejects the call outright on an absolute device, which is a
+   * client bug it is right to report.
+   */
+  #relative(): Entry {
+    const relative = this.#devices.get("relative")
+    if (relative?.emulating) return relative
+    return fail(
+      "CAPABILITY",
+      "The compositor offered no relative pointing device, so the pointer cannot be moved by a delta.",
+      "Move to an absolute position with computer_move x and y instead.",
+    )
   }
 
   #need(code: "NO_ABSOLUTE_POINTER" | "NO_KEYBOARD"): Entry {
@@ -392,7 +407,7 @@ export class EiSession {
   }
 
   moveBy(dx: number, dy: number): void {
-    const entry = this.#pointing()
+    const entry = this.#relative()
     libei().ei_device_pointer_motion(entry.device, dx, dy)
     this.#frame(entry)
     this.#trace(`move ${dx >= 0 ? "+" : ""}${dx},${dy >= 0 ? "+" : ""}${dy}`)
@@ -406,15 +421,19 @@ export class EiSession {
   }
 
   /**
-   * `notches` are wheel clicks. libei follows `wl_pointer`, where a positive
-   * value scrolls up, so "scroll down" has to travel the other way — getting
-   * this backwards is the classic silent bug in hand-rolled implementations.
+   * `notches` are wheel clicks. The sign is the one that actually works:
+   * verified against a page that logs its wheel events, KWin passes a discrete
+   * value straight through, and the browser treats a positive delta as moving
+   * the content up, i.e. revealing what is below. The libei header's `wl_pointer`
+   * wording reads the other way round, and following it silently scrolls the
+   * wrong way — which is invisible at the top of a page and maddening anywhere
+   * else.
    */
   scroll(direction: "up" | "down" | "left" | "right", notches: number): void {
     const entry = this.#pointing()
     const steps = Math.round(notches * 120)
-    const dx = direction === "left" ? steps : direction === "right" ? -steps : 0
-    const dy = direction === "up" ? steps : direction === "down" ? -steps : 0
+    const dx = direction === "right" ? steps : direction === "left" ? -steps : 0
+    const dy = direction === "down" ? steps : direction === "up" ? -steps : 0
     libei().ei_device_scroll_discrete(entry.device, dx, dy)
     this.#frame(entry)
     this.#trace(`scroll ${direction} ${notches}`)

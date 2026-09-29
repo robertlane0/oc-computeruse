@@ -68,7 +68,7 @@ export type Libei = {
   ei_keymap_get_fd: (keymap: Pointer) => number
   ei_keymap_get_size: (keymap: Pointer) => number
   ei_keymap_get_type: (keymap: Pointer) => number
-  pread: (fd: number, buffer: unknown, count: number, offset: number) => number
+  pread: (fd: number, buffer: unknown, count: number, offset: number) => bigint
 }
 
 /**
@@ -149,6 +149,7 @@ export const bindList = (caps: readonly number[]): number[] => [...caps, 0, 0, 0
 export function readKeymap(ei: Libei, keymap: Pointer): string {
   const size = ei.ei_keymap_get_size(keymap)
   const buffer = Buffer.alloc(size)
-  const got = ei.pread(ei.ei_keymap_get_fd(keymap), ptr(buffer), size, 0)
-  return buffer.subarray(0, got).toString("utf8")
+  // pread returns ssize_t, which the FFI surfaces as a BigInt.
+  const got = Number(ei.pread(ei.ei_keymap_get_fd(keymap), ptr(buffer), size, 0))
+  return buffer.subarray(0, Math.max(0, Math.min(size, got))).toString("utf8")
 }
